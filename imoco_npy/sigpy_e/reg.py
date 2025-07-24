@@ -9,6 +9,11 @@ from scipy.io import loadmat
 from scipy import linalg
 import ants
 
+import numpy as np, torch, fireants
+import SimpleITK as sitk
+import fireants.registration
+from fireants.io import Image, BatchedImages
+
 __all__ = ['interp_op', 'interp', 'ANTsReg', 'ANTsAff', 'interp_affine_op']
 
 def M_scale2(M, oshape, scale = 1):
@@ -138,6 +143,44 @@ def ANTsReg(If,Im,vox_res = [1,1,1], reg_level = [8,4,2], gauss_filt = [2,2,1]):
         except:
             continue
     
+    return Mt, iMt
+
+# GPU Based Registration using FireANTs
+def FireANTsReg(If, Im,
+                reg_level=[16, 8, 4, 2, 1],
+                iters=[100, 100, 80, 40, 20],
+                smooth_grad_sigma=1.0,
+                smooth_warp_sigma=0.25):
+
+    dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    fixed_img  = Image(sitk.GetImageFromArray(Im.astype(np.float32)), device=dev)
+    moving_img = Image(sitk.GetImageFromArray(If.astype(np.float32)), device=dev)
+    fixed, moving = BatchedImages([fixed_img]), BatchedImages([moving_img])
+
+    syn = fireants.registration.SyNRegistration(
+        scales            = reg_level,
+        iterations        = iters,
+        fixed_images      = fixed,
+        moving_images     = moving,
+        loss_type         = "cc",
+        optimizer         = "Adam",
+        optimizer_lr      = 0.1,
+        smooth_grad_sigma = smooth_grad_sigma,
+        smooth_warp_sigma = smooth_warp_sigma,
+    )
+    syn.optimize()
+
+    # Pull forward and inverse warps. Convert to float32 (Z,Y,X,3)
+    def tidy(warp_tensor):
+        arr = warp_tensor.detach().cpu().numpy() # (C, Z, Y, X)
+        if arr.shape[0] == 3:
+            arr = np.moveaxis(arr, 0, -1) # (Z, Y, X, 3)
+        return arr[..., [2, 1, 0]].astype(np.float32)
+
+    Mt  = tidy(syn.fwd_warp.get_warp()[0])
+    iMt = tidy(syn.rev_warp.get_warp()[0])
+
     return Mt, iMt
 
 ## get Jacobian, Specific Ventilation
