@@ -23,7 +23,7 @@ Tested with Python 3.10.6
    * sigpy
    * h5py
    * pydicom
-   * antspyx
+   * antspyx or fireants
    * numba
    * tqdm
    * scipy
